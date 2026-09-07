@@ -1,0 +1,46 @@
+[package]
+name = "video-service"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "video-service"
+path = "src/main.rs"
+
+[dependencies]
+actix-web        = "4"
+actix-multipart  = "0.7"
+tokio            = { version = "1", features = ["full"] }
+serde            = { version = "1", features = ["derive"] }
+serde_json       = "1"
+sqlx             = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono", "json", "migrate"] }
+uuid             = { version = "1", features = ["v4", "serde"] }
+chrono           = { version = "0.4", features = ["serde"] }
+reqwest          = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "charset", "http2"] }
+aws-config       = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3       = "1"
+aws-sdk-mediaconvert = "1"
+aws-credential-types = "1"
+rsa              = { version = "0.9", features = ["pem", "sha1"] }
+sha1             = "0.10"
+signature        = "2"
+base64           = "0.22"
+rand             = "0.8"
+tempfile         = "3"
+tokio-util       = { version = "0.7", features = ["io", "compat"] }
+tracing          = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+futures-util     = "0.3"
+bytes            = "1"
+anyhow           = "1"
+hs-utils         = { git = "https://github.com/Hikari-Systems/hs-utils-rs", tag = "v0.2.7", features = ["db", "web"] }
+thiserror        = "1"
+async-trait      = "0.1"
+mime             = "0.3"
+url              = "2"
+
+[profile.release]
+opt-level     = "s"
+strip         = true
+codegen-units = 1
+lto           = true

@@ -1,0 +1,107 @@
+{
+  "server": {
+    "port": 3000
+  },
+  "log": {
+    "level": "debug"
+  },
+  "videoMetadata": {
+    "parentPath": "/metadata",
+    "storage": "file"
+  },
+  "ffmpeg": {
+    "bin": "/usr/bin/ffmpeg",
+    "probeBin": "/usr/bin/ffprobe",
+    "timeoutSeconds": 300
+  },
+  "uploadDir": "/tmp",
+  "s3": {
+    "bucketName": "",
+    "accessKeyId": "",
+    "secretAccessKey": "",
+    "region": "us-east-1",
+    "endpointUrl": ""
+  },
+  "cloudfront": {
+    "url": "",
+    "expirySeconds": 10100,
+    "keypairId": "",
+    "privateKey": "",
+    "privateKeyFile": "",
+    "cookieDomain": ""
+  },
+  "mediaconvert": {
+    "roleArn": "",
+    "queueArn": "",
+    "region": "",
+    "endpointUrl": "",
+    "priority": 0,
+    "proxyPriority": 40,
+    "accelerated": false,
+    "statusUpdateIntervalSeconds": 60
+  },
+  "db": {
+    "host": "localhost",
+    "port": 5432,
+    "database": "video_service",
+    "username": "video-service",
+    "password": "video-service",
+    "ssl": {
+      "enabled": false,
+      "verify": false,
+      "caCertFile": ""
+    },
+    "minpool": 0,
+    "maxpool": 10,
+    "debug": false
+  },
+  "transcode": {
+    "processing": "deferred",
+    "renditionKeys": "proxy,sd,hd",
+    "fallbackOrder": "proxy,sd,hd",
+    "proxyRendition": "proxy",
+    "original": {
+      "mimeType": "video/mp4",
+      "extension": ".mp4"
+    },
+    "transcodeSweep": {
+      "enabled": "false",
+      "intervalSeconds": "60",
+      "batchSize": "2",
+      "reconcileBatchSize": "10",
+      "leaseSeconds": "900"
+    },
+    "proxy": {
+      "width": 640,
+      "height": 360,
+      "bitrate": 800000,
+      "kind": "progressive",
+      "mimeType": "video/mp4",
+      "extension": ".mp4"
+    },
+    "sd": {
+      "width": 1280,
+      "height": 720,
+      "bitrate": 2500000,
+      "kind": "progressive",
+      "mimeType": "video/mp4",
+      "extension": ".mp4"
+    },
+    "hd": {
+      "width": 1920,
+      "height": 1080,
+      "bitrate": 5000000,
+      "kind": "progressive",
+      "mimeType": "video/mp4",
+      "extension": ".mp4"
+    },
+    "hls": {
+      "kind": "hls",
+      "mimeType": "application/vnd.apple.mpegurl",
+      "extension": ".m3u8",
+      "ladder": "640x360@800000,1280x720@2500000,1920x1080@5000000",
+      "segmentSeconds": 6
+    },
+    "renditionSets": {}
+  }
+}

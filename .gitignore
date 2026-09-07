@@ -1,0 +1,4 @@
+target
+metadata
+# scratch dir for local runs against MinIO (scripts/local-env.sh)
+.local

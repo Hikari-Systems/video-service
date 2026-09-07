@@ -1,0 +1,99 @@
+name: Build and push to GHCR
+
+on:
+  push:
+    branches:
+      - '*'
+    tags-ignore:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      matrix:
+        platform: [amd64, arm64]
+        include:
+          - platform: amd64
+            runner: blacksmith-2vcpu-ubuntu-2404
+          - platform: arm64
+            runner: blacksmith-2vcpu-ubuntu-2404-arm
+    services:
+      registry:
+        image: registry:3.0
+        env:
+          REGISTRY_STORAGE: s3
+          REGISTRY_STORAGE_S3_ACCESSKEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          REGISTRY_STORAGE_S3_SECRETKEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          REGISTRY_STORAGE_S3_REGION: ${{ secrets.AWS_REGION }}
+          REGISTRY_STORAGE_S3_BUCKET: hikari-docker-registry
+          REGISTRY_HTTP_ADDR: :5000
+          REGISTRY_HTTP_SECRET: ${{ secrets.DOCKER_REGISTRY_SECRET }}
+        ports:
+          - 5000:5000
+    steps:
+      - name: Make repo name
+        run: echo "REPO_NAME=$(echo ${{ github.repository }} | sed -e 's/^Hikari-Systems\///')" >> $GITHUB_ENV
+
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Build and push to S3 registry
+        run: |
+          docker build --platform linux/${{ matrix.platform }} \
+            -t localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }}-${{ matrix.platform }} .
+          docker push localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }}-${{ matrix.platform }}
+
+  merge-manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build
+    services:
+      registry:
+        image: registry:3.0
+        env:
+          REGISTRY_STORAGE: s3
+          REGISTRY_STORAGE_S3_ACCESSKEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          REGISTRY_STORAGE_S3_SECRETKEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          REGISTRY_STORAGE_S3_REGION: ${{ secrets.AWS_REGION }}
+          REGISTRY_STORAGE_S3_BUCKET: hikari-docker-registry
+          REGISTRY_HTTP_ADDR: :5000
+          REGISTRY_HTTP_SECRET: ${{ secrets.DOCKER_REGISTRY_SECRET }}
+          REGISTRY_STORAGE_DELETE_ENABLED: "true"
+        ports:
+          - 5000:5000
+    steps:
+      - name: Make repo name
+        run: echo "REPO_NAME=$(echo ${{ github.repository }} | sed -e 's/^Hikari-Systems\///')" >> $GITHUB_ENV
+
+      - name: Make branch name
+        run: echo "BRANCH_NAME=$(echo ${{ github.ref }} | sed -e 's/^refs\/heads\///')" >> $GITHUB_ENV
+
+      - name: Install skopeo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y skopeo
+
+      - name: Log in to GHCR via skopeo
+        run: |
+          skopeo login ghcr.io \
+            --username ${{ github.actor }} \
+            --password ${{ secrets.GH_TOKEN }}
+
+      - name: Create multi-arch manifest in S3 registry
+        run: |
+          docker manifest create --insecure localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }} \
+            localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }}-amd64 \
+            localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }}-arm64
+          docker manifest push --insecure localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }}
+
+      - name: Copy multi-arch manifest from S3 registry to GHCR
+        run: |
+          for TAG in ${{ github.sha }} ${{ env.BRANCH_NAME }} latest; do
+            skopeo copy \
+              --all \
+              --src-tls-verify=false \
+              docker://localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }} \
+              docker://ghcr.io/hikari-systems/${{ env.REPO_NAME }}:${TAG}
+          done

@@ -1,0 +1,94 @@
+services:
+  video-service:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      # Env vars use __ as path separator with exact camelCase key names matching
+      # the config.json structure, e.g. videoMetadata__parentPath.
+      log__level: debug
+      videoMetadata__storage: db
+      db__host: postgres
+      db__port: 5432
+      db__database: video_service
+      db__username: video-service
+      db__password: video-service
+      # Local S3 — MinIO stands in for the real bucket. `endpointUrl` switches the
+      # SDK over and turns on path-style addressing.
+      s3__endpointUrl: http://minio:9000
+      s3__bucketName: video-service-local
+      s3__accessKeyId: minioadmin
+      s3__secretAccessKey: minioadmin
+      s3__region: us-east-1
+      # No keypairId means CloudFront URLs come back unsigned, pointing straight at
+      # MinIO's anonymous-download endpoint. This is the in-network address because
+      # the service follows these URLs itself; from the host, swap `minio` for
+      # `localhost` in any URL the API returns.
+      cloudfront__url: http://minio:9000/video-service-local
+      # MediaConvert has no local stand-in. Left empty on purpose: the service starts,
+      # probes, remuxes, and serves the playable original — everything except the
+      # renditions. Point mediaconvert__roleArn at a real role (and s3__bucketName at
+      # a real bucket) to exercise transcoding.
+      mediaconvert__roleArn: ""
+      transcode__transcodeSweep__enabled: "true"
+    volumes:
+      - ../../configs/video-service:/sandbox
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/healthcheck || exit 1"]
+      interval: 5s
+      timeout: 5s
+      start_period: 15s
+      retries: 10
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  # S3 stand-in for local testing. Console on :9001, API on :9000.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Creates the bucket and opens it for anonymous GET, so the unsigned "CloudFront"
+  # URLs the service hands out are directly fetchable. Runs once and exits.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/video-service-local &&
+      mc anonymous set download local/video-service-local
+      "
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: video_service
+      POSTGRES_USER: video-service
+      POSTGRES_PASSWORD: video-service
+    ports: ["5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U video-service -d video_service"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  minio-data:
