@@ -5,7 +5,7 @@ use tokio::fs;
 use tracing::{error, warn};
 use uuid::Uuid;
 
-use super::video::{VideoBackend, VideoRecord};
+use super::video::{TranscodeJob, VideoBackend, VideoRecord};
 
 /// JSON-on-disk metadata, for local runs and single-node setups.
 ///
@@ -45,6 +45,27 @@ impl VideoBackend for FileBackend {
                 Err(e).with_context(|| format!("Failed to read video file for id={}", id))
             }
         }
+    }
+
+    /// Read-modify-write, which is only safe because this backend is single-node by
+    /// construction — the sweep does not run on it at all.
+    async fn append_jobs(
+        &self,
+        id: Uuid,
+        jobs: &[TranscodeJob],
+        clear_lease: bool,
+    ) -> Result<VideoRecord> {
+        let mut record = self
+            .get(&id.to_string())
+            .await?
+            .with_context(|| format!("Video {id} not found while appending jobs"))?;
+        for job in jobs {
+            record.merge_job(job.clone());
+        }
+        if clear_lease {
+            record.avoid_transcode_until = None;
+        }
+        self.upsert(record).await
     }
 
     async fn upsert(&self, video: VideoRecord) -> Result<VideoRecord> {

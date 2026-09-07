@@ -260,6 +260,8 @@ All key names are **camelCase and case-sensitive**.
 | `transcode.fallbackOrder` | Order the playback chain tries renditions in. Cheapest first. Anything omitted is still reachable, appended in category order. |
 | `transcode.proxyRendition` | The rendition submitted as its own expedited job. Empty submits one job for everything. |
 | `transcode.transcodeSweep.enabled` | **Turn this on**, or submitted jobs are never recorded. |
+| `transcode.transcodeSweep.leaseSeconds` | How long a **submit** claim is held (default 900). Guards against a second node submitting the same video — a second bill. |
+| `transcode.transcodeSweep.pollSeconds` | How long a **reconcile** claim is held, i.e. how often a running job is polled (default 30). Keep it short and distinct from `leaseSeconds`. |
 | `cloudfront.cookieDomain` | Domain for the HLS playback cookies. Empty leaves them host-only, which is right when the player is served from the CDN domain. |
 | `ffmpeg.bin` / `ffmpeg.probeBin` | Used for the probe and the remux only. This service never encodes. |
 
@@ -312,6 +314,17 @@ MediaConvert jobs and two invoices.
 
 The claim is a **lease, not a flag**. A flag is only correct if whoever sets it lives
 to clear it, and on a spot fleet a node can vanish at any moment.
+
+The two leases are **not** the same duration and must not be conflated.
+`leaseSeconds` (900) guards a submission against duplication and covers an S3 upload
+of arbitrary size. `pollSeconds` (30) is how often a running job is looked at. Using
+the submit lease for polling makes a job that finished seconds ago invisible for
+fifteen minutes — playable in S3, `pending` in the API.
+
+An upload that intends to submit also takes the submit lease **in the same write
+that first makes its row visible**. Without that there is a window between "row has a
+source" and "row has jobs" in which a sweep pass sees an untouched video and submits
+its own jobs for it.
 
 ---
 

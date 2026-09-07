@@ -180,6 +180,27 @@ Deliberately. A source no browser can decode legitimately has **no playable orig
 ever**; requiring one would re-claim every ProRes upload forever, and each re-claim
 is a duplicate MediaConvert job. Only rendition count is compared.
 
+### The submit lease and the poll interval are different durations
+`leaseSeconds` (900) guards a submission; `pollSeconds` (30) is how often an in-flight
+job is polled. They were the same value once, and the result was a transcode that
+finished in ~4 seconds sitting unrecorded for 15 minutes — the renditions were in S3
+and the API said `pending`. Do not re-merge them.
+
+### An upload takes the submit lease in its FIRST write
+`process_video` sets `avoid_transcode_until` on the same upsert that first makes the
+row visible, and `append_jobs` releases it. Skipping this leaves a window between
+"row has a source" and "row has jobs" in which the sweep sees an untouched video and
+submits duplicate jobs. Measured against real MediaConvert: a two-rendition upload
+produced **four** jobs. Neither the unit tests nor the MinIO end-to-end run caught
+it — only real AWS did.
+
+### `submit_jobs` appends, it does not upsert
+`append_jobs` is a single `jobs = jobs || $2` statement. A whole-record write there
+would erase a rendition a concurrent reconcile had just recorded, and would lose one
+of two concurrent submitters' job ids — leaving MediaConvert jobs running, billing,
+and untracked. `POST /api/video/{id}/transcode` holds no lease, so this is a live
+path, not a theoretical one.
+
 ### `claim_for_*` are the only things standing between us and double billing
 Both use `UPDATE … FOR UPDATE SKIP LOCKED` with the lease written in the same
 statement as the selection. The file backend does **not** override them — the trait

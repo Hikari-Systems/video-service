@@ -69,7 +69,8 @@
       "intervalSeconds": "60",
       "batchSize": "2",
       "reconcileBatchSize": "10",
-      "leaseSeconds": "900"
+      "leaseSeconds": "900",
+      "pollSeconds": "30"
     },
     "proxy": {
       "width": 640,

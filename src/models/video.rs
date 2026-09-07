@@ -253,6 +253,24 @@ pub trait VideoBackend: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Append jobs to a video, atomically, and optionally release its lease.
+    ///
+    /// Deliberately not `upsert`. Submission builds its record from a copy read
+    /// moments earlier, and between that read and the write a reconcile may have
+    /// recorded a finished rendition — a whole-record write would erase it. Worse,
+    /// two submitters would each write their own `jobs` array and one set of job ids
+    /// would simply vanish, leaving MediaConvert jobs running and billing that
+    /// nothing in the database knows about.
+    ///
+    /// `POST /api/video/{id}/transcode` holds no lease at all, so this is not a
+    /// theoretical race on that path.
+    async fn append_jobs(
+        &self,
+        id: Uuid,
+        jobs: &[TranscodeJob],
+        clear_lease: bool,
+    ) -> Result<VideoRecord>;
+
     /// Set (or clear) a video's transcode lease without touching anything else.
     ///
     /// Deliberately not `upsert`: the sweep must not write back a whole record it

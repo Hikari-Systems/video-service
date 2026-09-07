@@ -10,6 +10,7 @@
 //!   results back whenever they arrive. Neither blocks the other.
 
 use anyhow::{Context, Result};
+use chrono::{Duration as ChronoDuration, Utc};
 use std::path::Path;
 use tempfile::Builder as TempBuilder;
 use tokio::fs;
@@ -132,6 +133,17 @@ fn split_keys(raw: &str) -> Vec<String> {
     raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
 }
 
+/// The lease an upload must hold while it is between "row exists" and "jobs
+/// recorded", or `None` when it will not submit anything.
+///
+/// `None` matters as much as `Some`: an upload that submits nothing (everything
+/// deferred) must leave the row immediately claimable, or the sweep would not pick
+/// it up until the lease expired.
+fn submission_lease(wanted: &[String], lease_seconds: u32) -> Option<chrono::DateTime<Utc>> {
+    (!wanted.is_empty())
+        .then(|| Utc::now() + ChronoDuration::seconds(lease_seconds.max(1) as i64))
+}
+
 /// The S3 key a rendition lands at.
 ///
 /// Deterministic on purpose. MediaConvert names a FILE_GROUP output
@@ -208,12 +220,30 @@ pub async fn process_video(
         .context("Failed to upload source to S3")?;
     info!("S3 upload done: {}", s3_path);
 
+    let rendition_keys = state.config.transcode.rendition_keys_for_category(&category_lc);
+    let wanted = selection.chosen(&rendition_keys);
+
     let mut record = VideoRecord {
         id: Some(id),
         category: Some(category_lc.clone()),
         source_url: url.map(str::to_string),
         downloaded_s3_path: Some(s3_path),
         probe: probe.clone(),
+        // Take the lease in the *same* write that first makes this row visible.
+        //
+        // Without this there is a window between "the row exists with a source" and
+        // "the row has jobs", and a sweep pass landing inside it sees a video that
+        // looks untouched: source present, no jobs in flight, no renditions. It
+        // claims the row and submits its own jobs, and the account is billed twice
+        // for one transcode. That is not hypothetical — it happened on the first run
+        // against real MediaConvert, producing four jobs for a two-rendition upload.
+        //
+        // The lease is released by `append_jobs` once the jobs are recorded, or it
+        // expires on its own if this task dies mid-upload.
+        avoid_transcode_until: submission_lease(
+            &wanted,
+            state.config.transcode.transcode_sweep.lease_seconds,
+        ),
         ..base
     };
 
@@ -237,8 +267,6 @@ pub async fn process_video(
 
     // Renditions are somebody else's problem from here — either this call submits
     // the jobs, or the sweep picks the record up and does it.
-    let rendition_keys = state.config.transcode.rendition_keys_for_category(&category_lc);
-    let wanted = selection.chosen(&rendition_keys);
     if wanted.is_empty() {
         return Ok(record);
     }
@@ -367,6 +395,7 @@ pub async fn submit_jobs(
     let file_destination = format!("s3://{}/", state.s3.bucket());
     let hls_destination_prefix = format!("s3://{}/{}-{}-", state.s3.bucket(), category, id);
 
+    let mut submitted: Vec<TranscodeJob> = Vec::new();
     for (batch, expedited) in [(proxy, true), (rest, false)] {
         let resolved = resolve(&batch);
         if resolved.is_empty() {
@@ -382,11 +411,11 @@ pub async fn submit_jobs(
             expedited,
         };
         match state.mediaconvert.submit(req).await {
-            Ok(job) => record.merge_job(TranscodeJob {
+            Ok(job) => submitted.push(TranscodeJob {
                 id: job.id,
                 status: "SUBMITTED".to_string(),
                 renditions: job.renditions,
-                submitted_at: chrono::Utc::now(),
+                submitted_at: Utc::now(),
                 percent_complete: None,
                 error: None,
             }),
@@ -396,11 +425,25 @@ pub async fn submit_jobs(
         }
     }
 
+    if submitted.is_empty() {
+        // Nothing was accepted, so leave the lease alone: it is now the retry
+        // backoff, and clearing it would have the next sweep pass try immediately.
+        anyhow::bail!("no MediaConvert jobs were accepted for video {id}");
+    }
+
+    // Append rather than write the record back. Two reasons, and the second one is
+    // the expensive one: a reconcile may have recorded a finished rendition since
+    // this record was read, and a whole-record write would erase it; and two
+    // concurrent submitters would each write their own `jobs` array, losing one set
+    // of ids and leaving those jobs running, billing, and untracked.
+    for job in &submitted {
+        record.merge_job(job.clone());
+    }
     state
         .backend
-        .upsert(record)
+        .append_jobs(id, &submitted, true)
         .await
-        .context("Failed to upsert video after submitting transcode jobs")
+        .context("Failed to record submitted transcode jobs")
 }
 
 /// Apply a job's current state to a record.
@@ -427,7 +470,7 @@ pub async fn reconcile_job(
         id: job_state.id.clone(),
         status: job_state.status.clone(),
         renditions: renditions.clone(),
-        submitted_at: existing.map(|j| j.submitted_at).unwrap_or_else(chrono::Utc::now),
+        submitted_at: existing.map(|j| j.submitted_at).unwrap_or_else(Utc::now),
         percent_complete: job_state.percent_complete,
         error: job_state.error.clone(),
     });
@@ -668,6 +711,32 @@ mod tests {
         // Nothing recognised: the declared type is the best remaining guess.
         assert_eq!(mime_for_container("avi"), None);
         assert_eq!(mime_for_container(""), None);
+    }
+
+    /// The window this closes was measured, not imagined: against real MediaConvert,
+    /// a two-rendition upload produced FOUR jobs, because a sweep pass landed between
+    /// the row becoming visible and its jobs being recorded, saw a video with a
+    /// source and no jobs, and submitted its own. Two transcodes, billed twice.
+    #[test]
+    fn an_upload_that_will_submit_holds_a_lease() {
+        let wanted = vec!["proxy".to_string()];
+        let lease = submission_lease(&wanted, 900).expect("must hold a lease while submitting");
+        let held_for = (lease - Utc::now()).num_seconds();
+        assert!((880..=900).contains(&held_for), "lease was {held_for}s");
+    }
+
+    /// An upload that submits nothing must stay immediately claimable, or the sweep
+    /// could not pick up a deferred video until the lease expired.
+    #[test]
+    fn an_upload_that_submits_nothing_takes_no_lease() {
+        assert!(submission_lease(&[], 900).is_none());
+    }
+
+    /// A zero or missing lease would reintroduce the race it exists to close.
+    #[test]
+    fn the_lease_is_never_zero() {
+        let wanted = vec!["proxy".to_string()];
+        assert!(submission_lease(&wanted, 0).unwrap() > Utc::now());
     }
 
     #[test]

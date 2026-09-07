@@ -171,6 +171,38 @@ impl VideoBackend for DbBackend {
         rows.into_iter().map(row_to_record).collect()
     }
 
+    /// `jobs = jobs || $2` in one statement, so concurrent writers cannot lose each
+    /// other's job ids and nothing else on the row is touched.
+    async fn append_jobs(
+        &self,
+        id: Uuid,
+        jobs: &[TranscodeJob],
+        clear_lease: bool,
+    ) -> Result<VideoRecord> {
+        let payload = serde_json::to_value(jobs).context("Failed to serialise jobs")?;
+        let sql = format!(
+            r#"
+            UPDATE video
+               SET jobs = coalesce(jobs, '[]'::jsonb) || $2::jsonb,
+                   avoid_transcode_until =
+                       CASE WHEN $3 THEN NULL ELSE avoid_transcode_until END,
+                   updated_at = now()
+             WHERE id = $1
+            RETURNING {COLUMNS}
+            "#
+        );
+
+        let row = sqlx::query_as::<_, VideoRow>(&sql)
+            .bind(id)
+            .bind(payload)
+            .bind(clear_lease)
+            .fetch_one(&self.pool)
+            .await
+            .context("DB error appending transcode jobs")?;
+
+        row_to_record(row)
+    }
+
     async fn set_transcode_lease(&self, id: Uuid, until: Option<DateTime<Utc>>) -> Result<()> {
         sqlx::query("UPDATE video SET avoid_transcode_until = $2 WHERE id = $1")
             .bind(id)

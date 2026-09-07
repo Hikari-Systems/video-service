@@ -367,18 +367,37 @@ pub struct TranscodeSweepConfig {
         deserialize_with = "deser_u32_or_str"
     )]
     pub reconcile_batch_size: u32,
-    /// How long a claim is held before another node may retry the video.
+    /// How long a **submit** claim is held before another node may retry the video.
     ///
     /// A **lease, not a flag**: a node that dies mid-pass frees its work when the
-    /// clock passes, with no operator and no stuck rows. Longer than the image
-    /// service's by default because the thing being waited on is a transcode queue
-    /// rather than a subprocess.
+    /// clock passes, with no operator and no stuck rows. Long, because what it
+    /// guards is expensive — a second node submitting the same video is a second
+    /// MediaConvert bill — and because the window it covers includes an S3 upload of
+    /// arbitrary size.
     #[serde(
         rename = "leaseSeconds",
         default = "default_sweep_lease",
         deserialize_with = "deser_u32_or_str"
     )]
     pub lease_seconds: u32,
+    /// How long a **reconcile** claim is held — that is, how long before an
+    /// in-flight job is polled again.
+    ///
+    /// Deliberately separate from, and far shorter than, `leaseSeconds`. Reusing the
+    /// submit lease here looks harmless and is not: it makes the poll interval equal
+    /// to the duplicate-submission guard, so a job that finished seconds after being
+    /// polled goes unnoticed for the whole of that guard. Measured against real
+    /// MediaConvert, a transcode that completed in about 4 seconds sat unrecorded
+    /// for 15 minutes — the video was playable in S3 and `pending` in the API.
+    ///
+    /// Still a lease rather than nothing, so a fleet does not have every replica
+    /// polling every running job on every pass.
+    #[serde(
+        rename = "pollSeconds",
+        default = "default_sweep_poll",
+        deserialize_with = "deser_u32_or_str"
+    )]
+    pub poll_seconds: u32,
 }
 
 impl Default for TranscodeSweepConfig {
@@ -389,6 +408,7 @@ impl Default for TranscodeSweepConfig {
             batch_size: default_sweep_batch(),
             reconcile_batch_size: default_sweep_reconcile(),
             lease_seconds: default_sweep_lease(),
+            poll_seconds: default_sweep_poll(),
         }
     }
 }
@@ -404,6 +424,7 @@ fn default_sweep_interval() -> u32 { 60 }
 fn default_sweep_batch() -> u32 { 2 }
 fn default_sweep_reconcile() -> u32 { 10 }
 fn default_sweep_lease() -> u32 { 900 }
+fn default_sweep_poll() -> u32 { 30 }
 
 impl TranscodeConfig {
     /// The rendition keys configured for a category, falling back to the global list.

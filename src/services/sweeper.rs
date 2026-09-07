@@ -55,8 +55,13 @@ pub fn spawn(state: Arc<AppState>) {
     let interval = Duration::from_secs(cfg.interval_seconds.max(1) as u64);
 
     info!(
-        "transcode sweep: on — every {}s, up to {} submission(s) and {} reconcile(s) per pass, {}s lease",
-        cfg.interval_seconds, cfg.batch_size, cfg.reconcile_batch_size, cfg.lease_seconds
+        "transcode sweep: on — every {}s, up to {} submission(s) ({}s lease) and {} \
+         reconcile(s) ({}s poll) per pass",
+        cfg.interval_seconds,
+        cfg.batch_size,
+        cfg.lease_seconds,
+        cfg.reconcile_batch_size,
+        cfg.poll_seconds
     );
 
     tokio::spawn(async move {
@@ -116,9 +121,12 @@ async fn pass(state: &AppState) -> anyhow::Result<()> {
 /// Poll the jobs that are running and write back whatever finished.
 async fn reconcile_pass(state: &AppState, batch: u32) -> anyhow::Result<usize> {
     let cfg = &state.config.transcode.transcode_sweep;
+    // `poll_seconds`, NOT `lease_seconds`. This claim answers "when should this job
+    // be looked at again?", which has nothing to do with how long a submission must
+    // be protected from a duplicate.
     let claimed = state
         .backend
-        .claim_for_reconcile(batch.max(1) as i64, cfg.lease_seconds.max(1) as i64)
+        .claim_for_reconcile(batch.max(1) as i64, cfg.poll_seconds.max(1) as i64)
         .await?;
 
     if claimed.is_empty() {
@@ -164,9 +172,9 @@ async fn reconcile_pass(state: &AppState, batch: u32) -> anyhow::Result<usize> {
         }
 
         // Clear the lease when nothing is running any more, so the submit phase can
-        // pick the row up immediately if it is still short of renditions. While a
-        // job is running, leave the lease as the claim set it — it doubles as the
-        // poll interval.
+        // pick the row up immediately if it is still short of renditions. While a job
+        // is running, leave the claim's lease in place: at `poll_seconds` it is the
+        // poll interval, and it keeps a fleet from all polling the same job at once.
         if !still_running {
             if let Err(e) = state.backend.set_transcode_lease(id, None).await {
                 warn!("transcode sweep: {id} lease not cleared: {e:#}");
@@ -217,19 +225,12 @@ async fn submit_pass(state: &AppState, batch: u32) -> anyhow::Result<usize> {
         }
 
         info!("transcode sweep: {id} submitting {missing:?}");
+        // `submit_jobs` records the ids and releases the lease in one statement, so
+        // the reconcile phase can pick the row up on the next pass rather than
+        // waiting out a lease sized for a whole transcode. On failure it leaves the
+        // lease alone, where it doubles as the retry backoff.
         match submit_jobs(video, &missing, state).await {
-            Ok(updated) => {
-                submitted += 1;
-                // Clear the lease so the reconcile phase can pick the row up on the
-                // next pass rather than waiting out a lease sized for a transcode.
-                if updated.has_in_flight_job() {
-                    if let Err(e) = state.backend.set_transcode_lease(id, None).await {
-                        warn!("transcode sweep: {id} submitted but lease not cleared: {e:#}");
-                    }
-                }
-            }
-            // Leave the lease alone — the claim already set it, so it doubles as the
-            // retry backoff.
+            Ok(_) => submitted += 1,
             Err(e) => error!("transcode sweep: {id} submission failed, will retry after lease: {e:#}"),
         }
     }
