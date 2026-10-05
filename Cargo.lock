@@ -1726,8 +1726,8 @@ dependencies = [
 
 [[package]]
 name = "hs-utils"
-version = "0.2.7"
-source = "git+https://github.com/Hikari-Systems/hs-utils-rs?tag=v0.2.7#493985dc86e38f6fe6be6696f21fd1d7f42fe064"
+version = "0.32.0"
+source = "git+https://github.com/Hikari-Systems/hs-utils-rs?tag=v0.32.0#e2af7170cebf9f6c40ed17313a7b458969311077"
 dependencies = [
  "actix-http",
  "actix-service",
@@ -1911,7 +1911,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -2539,7 +2539,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.44",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -2577,7 +2577,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.61.2",
 ]

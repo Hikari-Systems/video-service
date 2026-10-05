@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use hs_utils::config::{
-    apply_env_overrides, deep_merge, deser_i64_or_str, deser_opt_bool_or_str, deser_opt_i32_or_str,
-    deser_u16_or_str, deser_u32_or_str, prepare_config,
+    deser_i64_or_str, deser_opt_bool_or_str, deser_opt_i32_or_str, deser_u16_or_str,
+    deser_u32_or_str, load_layered_value,
 };
 pub use hs_utils::db::DbConfig;
 use serde::Deserialize;
@@ -526,32 +526,16 @@ impl Default for FfmpegConfig {
 }
 
 impl AppConfig {
-    /// Load configuration in priority order (lowest → highest):
+    /// Load configuration via `hs_utils::config::load_layered_value`, in priority
+    /// order (lowest → highest):
     ///
-    /// 1. `config.json` in the working directory
-    /// 2. `/sandbox/config.json` — deep-merged on top; silently ignored if absent
+    /// 1. `/app/config.json` if present, else `config.json` in the working directory
+    /// 2. `${CONFIG_PATH:-/sandbox}/config.json` — deep-merged on top; ignored if absent
     /// 3. Env vars with `__` separator, e.g. `s3__bucketName=my-bucket`
+    /// 4. `[SECRET]:/path` indirections resolved on the final values (so a secret
+    ///    supplied through an env var is resolved too)
     pub fn load() -> Result<Self> {
-        let mut root: Value = match std::fs::read_to_string("config.json") {
-            Ok(s) => serde_json::from_str(&s).context("Failed to parse config.json")?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Value::Object(Default::default())
-            }
-            Err(e) => return Err(e).context("Failed to read config.json"),
-        };
-
-        match std::fs::read_to_string("/sandbox/config.json") {
-            Ok(s) => {
-                let overlay: Value = serde_json::from_str(&s)
-                    .context("Failed to parse /sandbox/config.json")?;
-                deep_merge(&mut root, overlay);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e).context("Failed to read /sandbox/config.json"),
-        }
-
-        prepare_config(&mut root);
-        apply_env_overrides(&mut root);
+        let root: Value = load_layered_value()?;
         serde_json::from_value(root).context("Failed to deserialise config")
     }
 }

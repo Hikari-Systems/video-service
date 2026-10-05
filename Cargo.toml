@@ -33,7 +33,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 futures-util     = "0.3"
 bytes            = "1"
 anyhow           = "1"
-hs-utils         = { git = "https://github.com/Hikari-Systems/hs-utils-rs", tag = "v0.2.7", features = ["db", "web"] }
+hs-utils         = { git = "https://github.com/Hikari-Systems/hs-utils-rs", tag = "v0.32.0", features = ["db", "web"] }
 thiserror        = "1"
 async-trait      = "0.1"
 mime             = "0.3"
