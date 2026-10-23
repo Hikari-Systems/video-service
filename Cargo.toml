@@ -18,8 +18,8 @@ uuid             = { version = "1", features = ["v4", "serde"] }
 chrono           = { version = "0.4", features = ["serde"] }
 reqwest          = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "charset", "http2"] }
 aws-config       = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-s3       = "1"
-aws-sdk-mediaconvert = "1"
+aws-sdk-s3       = { version = "1", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
+aws-sdk-mediaconvert = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-credential-types = "1"
 rsa              = { version = "0.9", features = ["pem", "sha1"] }
 sha1             = "0.10"
