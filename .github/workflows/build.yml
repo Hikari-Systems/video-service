@@ -16,9 +16,9 @@ jobs:
         platform: [amd64, arm64]
         include:
           - platform: amd64
-            runner: blacksmith-2vcpu-ubuntu-2404
+            runner: self-hosted-public-amd64
           - platform: arm64
-            runner: blacksmith-2vcpu-ubuntu-2404-arm
+            runner: self-hosted-public-arm64
     services:
       registry:
         image: registry:3.0
@@ -30,23 +30,41 @@ jobs:
           REGISTRY_STORAGE_S3_BUCKET: hikari-docker-registry
           REGISTRY_HTTP_ADDR: :5000
           REGISTRY_HTTP_SECRET: ${{ secrets.DOCKER_REGISTRY_SECRET }}
-        ports:
-          - 5000:5000
     steps:
       - name: Make repo name
-        run: echo "REPO_NAME=$(echo ${{ github.repository }} | sed -e 's/^Hikari-Systems\///')" >> $GITHUB_ENV
+        run: echo "REPO_NAME=${{ github.event.repository.name }}" >> $GITHUB_ENV
 
       - name: Checkout repository
         uses: actions/checkout@v6.0.2
 
+      # A buildx builder on the job's Docker network, so it reaches the plain-HTTP registry by its
+      # service name and needs no host port: under Docker Desktop a host-network container cannot
+      # reach Docker-assigned host ports. Runners start empty, so the layer cache (the stub-main
+      # dependency layer above all) lives in that S3-backed registry, one cache tag per platform.
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: network=${{ job.container.network }}
+          buildkitd-config-inline: |
+            [registry."registry:5000"]
+              http = true
+              insecure = true
+
+      # No provenance or SBOM: they would turn each per-platform tag into an index,
+      # which `docker manifest create` refuses.
       - name: Build and push to S3 registry
         run: |
-          docker build --platform linux/${{ matrix.platform }} \
-            -t localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }}-${{ matrix.platform }} .
-          docker push localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }}-${{ matrix.platform }}
+          CACHE=registry:5000/${{ env.REPO_NAME }}:buildcache-${{ matrix.platform }}
+          docker buildx build --platform linux/${{ matrix.platform }} \
+            --cache-from type=registry,ref=$CACHE \
+            --cache-to type=registry,ref=$CACHE,mode=max,image-manifest=true,oci-mediatypes=true \
+            --provenance=false --sbom=false --push \
+            -t registry:5000/${{ env.REPO_NAME }}:${{ github.sha }}-${{ matrix.platform }} .
 
+  # On the amd64 hosts: the registry is reached on a Docker-assigned host port via localhost, and
+  # skopeo may need sudo apt.
   merge-manifest:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-public-amd64
     timeout-minutes: 10
     needs: build
     services:
@@ -62,38 +80,51 @@ jobs:
           REGISTRY_HTTP_SECRET: ${{ secrets.DOCKER_REGISTRY_SECRET }}
           REGISTRY_STORAGE_DELETE_ENABLED: "true"
         ports:
-          - 5000:5000
+          - 5000
     steps:
+      # The registry's host port is assigned by Docker, so jobs on runners that share a host
+      # don't collide on 5000.
+      - name: Registry address
+        run: echo "REGISTRY=localhost:${{ job.services.registry.ports['5000'] }}" >> $GITHUB_ENV
+
       - name: Make repo name
-        run: echo "REPO_NAME=$(echo ${{ github.repository }} | sed -e 's/^Hikari-Systems\///')" >> $GITHUB_ENV
+        run: echo "REPO_NAME=${{ github.event.repository.name }}" >> $GITHUB_ENV
 
       - name: Make branch name
-        run: echo "BRANCH_NAME=$(echo ${{ github.ref }} | sed -e 's/^refs\/heads\///')" >> $GITHUB_ENV
+        env:
+          REF: ${{ github.ref }}
+        run: echo "BRANCH_NAME=${REF#refs/heads/}" >> $GITHUB_ENV
 
+      # skopeo's default auth file is under /run/containers/<uid>, which a runner service can't create.
       - name: Install skopeo
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y skopeo
+          command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y skopeo; }
+          echo "REGISTRY_AUTH_FILE=$RUNNER_TEMP/skopeo-auth.json" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR via skopeo
+        # --password-stdin keeps the token out of skopeo's argv.
+        env:
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          skopeo login ghcr.io \
-            --username ${{ github.actor }} \
-            --password ${{ secrets.GH_TOKEN }}
+          printf '%s' "$GH_TOKEN" | skopeo login ghcr.io \
+            --username "$GH_ACTOR" \
+            --password-stdin
 
       - name: Create multi-arch manifest in S3 registry
         run: |
-          docker manifest create --insecure localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }} \
-            localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }}-amd64 \
-            localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }}-arm64
-          docker manifest push --insecure localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }}
+          docker manifest create --insecure $REGISTRY/${{ env.REPO_NAME }}:${{ github.sha }} \
+            $REGISTRY/${{ env.REPO_NAME }}:${{ github.sha }}-amd64 \
+            $REGISTRY/${{ env.REPO_NAME }}:${{ github.sha }}-arm64
+          docker manifest push --insecure $REGISTRY/${{ env.REPO_NAME }}:${{ github.sha }}
 
       - name: Copy multi-arch manifest from S3 registry to GHCR
+        # "$BRANCH_NAME", not ${{ env.BRANCH_NAME }}: the ref stays out of the script text.
         run: |
-          for TAG in ${{ github.sha }} ${{ env.BRANCH_NAME }} latest; do
+          for TAG in "$GITHUB_SHA" "$BRANCH_NAME" latest; do
             skopeo copy \
               --all \
               --src-tls-verify=false \
-              docker://localhost:5000/${{ env.REPO_NAME }}:${{ github.sha }} \
+              docker://$REGISTRY/${{ env.REPO_NAME }}:${{ github.sha }} \
               docker://ghcr.io/hikari-systems/${{ env.REPO_NAME }}:${TAG}
           done
