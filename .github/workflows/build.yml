@@ -41,14 +41,24 @@ jobs:
       # service name and needs no host port: under Docker Desktop a host-network container cannot
       # reach Docker-assigned host ports. Runners start empty, so the layer cache (the stub-main
       # dependency layer above all) lives in that S3-backed registry, one cache tag per platform.
+      # A builder ignores its host daemon's registry mirrors. HUB_MIRROR is set in the .env of runners on
+      # a network with a Docker Hub proxy; without it (Blacksmith, GitHub) builds use Docker Hub as usual.
+      - name: Write the buildx config
+        run: |
+          CONFIG="$RUNNER_TEMP/buildkitd.toml"
+          printf '[registry."registry:5000"]\n  http = true\n  insecure = true\n' > "$CONFIG"
+          if [ -n "${HUB_MIRROR:-}" ]; then
+            MIRROR="${HUB_MIRROR#http://}"
+            printf '[registry."docker.io"]\n  mirrors = ["%s"]\n[registry."%s"]\n  http = true\n  insecure = true\n' "$MIRROR" "$MIRROR" >> "$CONFIG"
+            echo "Using the Docker Hub proxy at $MIRROR"
+          fi
+          echo "BUILDKITD_CONFIG=$CONFIG" >> "$GITHUB_ENV"
+
       - name: Set up buildx
         uses: docker/setup-buildx-action@v4
         with:
           driver-opts: network=${{ job.container.network }}
-          buildkitd-config-inline: |
-            [registry."registry:5000"]
-              http = true
-              insecure = true
+          buildkitd-config: ${{ env.BUILDKITD_CONFIG }}
 
       # No provenance or SBOM: they would turn each per-platform tag into an index,
       # which `docker manifest create` refuses.
