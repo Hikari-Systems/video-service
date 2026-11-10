@@ -92,6 +92,7 @@ impl VideoBackend for DbBackend {
     /// * **Incompleteness is per category**, so a 2-rendition `clip` is not judged
     ///   against a 3-rendition `feature`, and a finished row stops matching instead
     ///   of being re-claimed forever.
+    #[tracing::instrument(skip_all, level = "debug", name = "db.video.claim_for_submit", fields(db.system.name = "postgresql"))]
     async fn claim_for_submit(
         &self,
         limit: i64,
@@ -142,6 +143,7 @@ impl VideoBackend for DbBackend {
     ///
     /// Ordered by `avoid_transcode_until` rather than `created_at`: what matters is
     /// which row has gone longest without a look, not which video is oldest.
+    #[tracing::instrument(skip_all, level = "debug", name = "db.video.claim_for_reconcile", fields(db.system.name = "postgresql"))]
     async fn claim_for_reconcile(&self, limit: i64, lease_seconds: i64) -> Result<Vec<VideoRecord>> {
         let sql = format!(
             r#"
@@ -173,6 +175,7 @@ impl VideoBackend for DbBackend {
 
     /// `jobs = jobs || $2` in one statement, so concurrent writers cannot lose each
     /// other's job ids and nothing else on the row is touched.
+    #[tracing::instrument(skip_all, name = "db.video.append_jobs", fields(db.system.name = "postgresql"))]
     async fn append_jobs(
         &self,
         id: Uuid,
@@ -203,6 +206,7 @@ impl VideoBackend for DbBackend {
         row_to_record(row)
     }
 
+    #[tracing::instrument(skip_all, name = "db.video.set_transcode_lease", fields(db.system.name = "postgresql"))]
     async fn set_transcode_lease(&self, id: Uuid, until: Option<DateTime<Utc>>) -> Result<()> {
         sqlx::query("UPDATE video SET avoid_transcode_until = $2 WHERE id = $1")
             .bind(id)
@@ -213,6 +217,7 @@ impl VideoBackend for DbBackend {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all, name = "db.video.get", fields(db.system.name = "postgresql"))]
     async fn get(&self, id: &str) -> Result<Option<VideoRecord>> {
         let uuid: Uuid = id.parse().context("Invalid UUID format")?;
         let sql = format!("SELECT {COLUMNS} FROM video WHERE id = $1");
@@ -229,6 +234,7 @@ impl VideoBackend for DbBackend {
         }
     }
 
+    #[tracing::instrument(skip_all, name = "db.video.upsert", fields(db.system.name = "postgresql"))]
     async fn upsert(&self, video: VideoRecord) -> Result<VideoRecord> {
         let id = video.id.unwrap_or_else(Uuid::new_v4);
         let renditions: Option<Value> = match &video.rendition_files {

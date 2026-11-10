@@ -1,0 +1,3 @@
+disallowed-methods = [
+    { path = "reqwest::RequestBuilder::send", reason = "use .send_traced() / .send_traced_opaque() (hs_utils::http_client::SendTraced) so the call is traced and carries traceparent" },
+]

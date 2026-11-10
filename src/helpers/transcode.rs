@@ -560,8 +560,11 @@ pub async fn ingest_from_url(
         .context("Failed to download video from source URL")?;
 
     info!(
-        "ingested {} ({} bytes, {}) for category {}",
-        src_url, downloaded.bytes, downloaded.mime_type, category
+        "ingested from {} ({} bytes, {}) for category {}",
+        crate::services::downloader::url_origin(&src_url),
+        downloaded.bytes,
+        downloaded.mime_type,
+        category
     );
 
     let result = process_video(

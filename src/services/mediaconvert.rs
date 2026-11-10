@@ -30,6 +30,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::config::{MediaConvertConfig, RenditionConfig, S3Config};
+use crate::traced::Traced as _;
 
 /// A job we have handed to MediaConvert.
 #[derive(Debug, Clone)]
@@ -213,6 +214,7 @@ impl MediaConvertService {
 
         let out = call
             .send()
+            .traced(crate::traced::mediaconvert("CreateJob"))
             .await
             .with_context(|| format!("MediaConvert CreateJob failed for video {}", req.video_id))?;
 
@@ -245,6 +247,7 @@ impl MediaConvertService {
             .get_job()
             .id(job_id)
             .send()
+            .traced(crate::traced::mediaconvert("GetJob"))
             .await
             .with_context(|| format!("MediaConvert GetJob failed for job {}", job_id))?;
 

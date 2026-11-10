@@ -502,6 +502,8 @@ pub struct AppConfig {
     pub db: DbConfig,
     #[serde(default)]
     pub transcode: TranscodeConfig,
+    #[serde(default)]
+    pub otel: hs_utils::otel::OtelConfig,
 }
 
 impl Default for ServerConfig {

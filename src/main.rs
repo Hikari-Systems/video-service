@@ -4,10 +4,12 @@ mod models;
 mod routes;
 mod services;
 mod state;
+mod traced;
 
 use actix_web::{middleware, web, App, HttpResponse};
 use anyhow::{Context, Result};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::info;
 
 use config::AppConfig;
@@ -62,7 +64,9 @@ fn transcode_sweep_subcommand() -> Option<Option<u32>> {
 async fn run() -> Result<()> {
     let cfg = AppConfig::load().context("Failed to load application config")?;
 
-    hs_utils::logging::init(&cfg.log.level);
+    // Held for the whole of `run`; dropping it flushes the exporters (see
+    // `flush_otel`).
+    let otel = hs_utils::otel::init(&cfg.log.level, &cfg.otel)?;
 
     info!("video-service starting on port {}", cfg.server.port);
 
@@ -118,7 +122,9 @@ async fn run() -> Result<()> {
     // It takes the same lease as the loop does, so running it by hand while the loop
     // is on is safe — the two cannot pick the same video.
     if let Some(batch) = transcode_sweep_subcommand() {
-        return services::sweeper::run_once(&app_state, batch).await;
+        let result = services::sweeper::run_once(&app_state, batch).await;
+        flush_otel(otel, cfg.otel.enabled).await;
+        return result;
     }
 
     // Gated here rather than inside the loop so the "it will do nothing" case is one
@@ -150,11 +156,18 @@ async fn run() -> Result<()> {
 
     let port = cfg.server.port;
 
+    // actix stops gracefully on SIGTERM and SIGINT by itself, so `run` returns
+    // under `docker stop` and the flush below gets to run.
     hs_utils::server::run(port, move || {
         App::new()
             // /healthcheck is polled constantly by the load balancer — keep it out
-            // of the request log.
-            .wrap(middleware::Logger::default().exclude("/healthcheck"))
+            // of the request log. No client address, referer or user agent: with
+            // otel on, these lines are exported.
+            .wrap(middleware::Logger::new("\"%r\" %s %b %T").exclude("/healthcheck"))
+            // One server span per request, named by route template, continuing the
+            // caller's traceparent. /healthcheck is a debug span, so the load
+            // balancer's polling is not exported.
+            .wrap(hs_utils::otel::actix_trace())
             .app_data(app_state.clone())
             .route(
                 "/healthcheck",
@@ -164,7 +177,42 @@ async fn run() -> Result<()> {
             .route("/test", web::get().to(test_page))
             .route("/test/", web::get().to(test_page))
     })
-    .await
+    .await?;
+
+    flush_otel(otel, cfg.otel.enabled).await;
+    Ok(())
+}
+
+/// How long shutdown waits for the exporters to flush before giving up on them.
+const OTEL_FLUSH_DEADLINE: Duration = Duration::from_secs(5);
+
+/// Drop the otel guard (which flushes the exporters) under a deadline, so an
+/// unreachable collector cannot hold the process past `docker stop`'s grace
+/// period.
+async fn flush_otel(otel: hs_utils::otel::OtelGuard, enabled: bool) {
+    let started = std::time::Instant::now();
+    let flushed = tokio::time::timeout(
+        OTEL_FLUSH_DEADLINE,
+        tokio::task::spawn_blocking(move || drop(otel)),
+    )
+    .await;
+
+    // `warn!` on the timeout arm: spans were dropped, which is a degraded shutdown.
+    if flushed.is_err() {
+        tracing::warn!(
+            shutdown.otel_flush_ms = started.elapsed().as_millis(),
+            shutdown.otel_flush_timed_out = true,
+            otel.enabled = enabled,
+            "shutdown complete, but the otel flush hit its deadline and spans were dropped"
+        );
+    } else {
+        tracing::info!(
+            shutdown.otel_flush_ms = started.elapsed().as_millis(),
+            shutdown.otel_flush_timed_out = false,
+            otel.enabled = enabled,
+            "shutdown complete"
+        );
+    }
 }
 
 async fn test_page() -> HttpResponse {

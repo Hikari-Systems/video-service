@@ -7,6 +7,7 @@ services:
       # Env vars use __ as path separator with exact camelCase key names matching
       # the config.json structure, e.g. videoMetadata__parentPath.
       log__level: debug
+      otel__enabled: "false"
       videoMetadata__storage: db
       db__host: postgres
       db__port: 5432

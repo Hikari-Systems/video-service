@@ -11,6 +11,7 @@ use tokio::time::timeout;
 use tracing::{debug, info};
 
 use crate::config::S3Config;
+use crate::traced::Traced as _;
 
 /// Above this, the upload is split into parts rather than read into memory.
 ///
@@ -98,7 +99,8 @@ impl S3Service {
                 .key(to)
                 .body(body)
                 .content_type(mime_type)
-                .send(),
+                .send()
+                .traced(crate::traced::s3("PutObject", &self.bucket)),
         )
         .await
         .with_context(|| format!("S3 PutObject timed out after 300s for key={}", to))?
@@ -120,6 +122,7 @@ impl S3Service {
             .key(to)
             .content_type(mime_type)
             .send()
+            .traced(crate::traced::s3("CreateMultipartUpload", &self.bucket))
             .await
             .with_context(|| format!("S3 CreateMultipartUpload failed for key={}", to))?;
 
@@ -141,6 +144,7 @@ impl S3Service {
                             .build(),
                     )
                     .send()
+                    .traced(crate::traced::s3("CompleteMultipartUpload", &self.bucket))
                     .await
                     .with_context(|| format!("S3 CompleteMultipartUpload failed for key={}", to))?;
                 info!("S3 multipart upload done: {}", to);
@@ -156,6 +160,7 @@ impl S3Service {
                     .key(to)
                     .upload_id(&upload_id)
                     .send()
+                    .traced(crate::traced::s3("AbortMultipartUpload", &self.bucket))
                     .await
                 {
                     tracing::warn!("S3 AbortMultipartUpload failed for key={to}: {abort_err}");
@@ -209,6 +214,7 @@ impl S3Service {
                 .part_number(part_number)
                 .body(ByteStream::from(buf))
                 .send()
+                .traced(crate::traced::s3("UploadPart", &self.bucket))
                 .await
                 .with_context(|| format!("S3 UploadPart {} failed for key={}", part_number, to))?;
 
@@ -233,6 +239,7 @@ impl S3Service {
             .bucket(&self.bucket)
             .key(key)
             .send()
+            .traced(crate::traced::s3("HeadObject", &self.bucket))
             .await
         {
             Ok(_) => Ok(true),

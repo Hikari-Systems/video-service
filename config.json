@@ -5,6 +5,11 @@
   "log": {
     "level": "debug"
   },
+  "otel": {
+    "enabled": "false",
+    "serviceName": "video-service",
+    "level": "info"
+  },
   "videoMetadata": {
     "parentPath": "/metadata",
     "storage": "file"
@@ -53,6 +58,7 @@
     },
     "minpool": 0,
     "maxpool": 10,
+    "slowqueryms": 250,
     "debug": false
   },
   "transcode": {

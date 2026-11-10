@@ -422,7 +422,11 @@ async fn ingest_url(
             })
         }
         Err(e) => {
-            error!("Error ingesting {}: {:#}", body.url, e);
+            error!(
+                "Error ingesting from {}: {:#}",
+                crate::services::downloader::url_origin(&body.url),
+                e
+            );
             HttpResponse::InternalServerError().finish()
         }
     }

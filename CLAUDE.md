@@ -287,9 +287,21 @@ on a large table.
 
 ## Instrumented calls (hs-utils otel)
 
-Traces and metrics come from hs-utils' `otel` module, v0.37.1 and later. This repo is on v0.35.0, so until it
-bumps, read this section as the target. All of it is inert until `otel.enabled` is set, so it can land before
-a Collector or Honeycomb key exists. The full reference is hs-utils' `CLAUDE.md` (v0.37.0).
+Traces and metrics come from hs-utils' `otel` module; this repo is on v0.37.2. All of it is inert until
+`otel.enabled` is set, so it can land before a Collector or Honeycomb key exists.
+
+What this repo does with it:
+- **URL ingest** (`services/downloader.rs`) fetches a caller-supplied URL, often presigned, so it uses
+  `.send_traced_opaque()` and `reqwest::Error::without_url`, and every log line names the URL by
+  `url_origin()` only. Do the same for any new call to a URL that might carry a signature, CloudFront-signed
+  ones included.
+- **S3 and MediaConvert** calls get client spans through `src/traced.rs` (`.traced(crate::traced::s3(op,
+  bucket))`). The span names the bucket, never the key.
+- **The sweep** is a poll loop: its claim queries are `level = "debug"` db spans, and the work a non-empty
+  claim does runs under an info `transcode_sweep.reconcile` / `transcode_sweep.submit` span. Any new
+  per-interval call there goes at debug (`send_traced_at(Level::DEBUG)` for reqwest).
+
+The full reference is hs-utils' `CLAUDE.md`.
 
 **Startup.**
 - `let _otel = hs_utils::otel::init(&log_level, &cfg.otel)?;` replaces `logging::init`, with the same level

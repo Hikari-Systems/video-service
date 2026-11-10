@@ -39,7 +39,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::TranscodeConfig;
 use crate::helpers::transcode::{missing_renditions, reconcile_job, submit_jobs};
-use crate::models::video::ExpectedRenditions;
+use crate::models::video::{ExpectedRenditions, VideoRecord};
 use crate::state::AppState;
 
 /// How long to park a video the sweep claimed but found nothing to do for.
@@ -134,7 +134,14 @@ async fn reconcile_pass(state: &AppState, batch: u32) -> anyhow::Result<usize> {
         return Ok(0);
     }
     info!("transcode sweep: polling {} video(s) with jobs in flight", claimed.len());
+    Ok(reconcile_claimed(state, claimed).await)
+}
 
+/// The reconcile work for one pass's claim. An info span of its own, entered only
+/// when the claim found something, so an idle pass (whose claim query is a debug
+/// span) exports nothing while a pass that did work is one trace.
+#[tracing::instrument(skip_all, name = "transcode_sweep.reconcile", fields(videos = claimed.len()))]
+async fn reconcile_claimed(state: &AppState, claimed: Vec<VideoRecord>) -> usize {
     let mut done = 0usize;
     for mut video in claimed {
         let Some(id) = video.id else { continue };
@@ -181,7 +188,7 @@ async fn reconcile_pass(state: &AppState, batch: u32) -> anyhow::Result<usize> {
             }
         }
     }
-    Ok(done)
+    done
 }
 
 /// Submit jobs for videos that still need renditions.
@@ -209,7 +216,13 @@ async fn submit_pass(state: &AppState, batch: u32) -> anyhow::Result<usize> {
         return Ok(0);
     }
     info!("transcode sweep: claimed {} video(s) to submit", claimed.len());
+    Ok(submit_claimed(state, claimed).await)
+}
 
+/// The submit work for one pass's claim; an info span only when there is some (see
+/// [`reconcile_claimed`]).
+#[tracing::instrument(skip_all, name = "transcode_sweep.submit", fields(videos = claimed.len()))]
+async fn submit_claimed(state: &AppState, claimed: Vec<VideoRecord>) -> usize {
     let mut submitted = 0usize;
     for video in claimed {
         let Some(id) = video.id else { continue };
@@ -234,7 +247,7 @@ async fn submit_pass(state: &AppState, batch: u32) -> anyhow::Result<usize> {
             Err(e) => error!("transcode sweep: {id} submission failed, will retry after lease: {e:#}"),
         }
     }
-    Ok(submitted)
+    submitted
 }
 
 /// The (category, expected-rendition-count) pairs the claim query judges against,
