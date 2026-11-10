@@ -282,3 +282,61 @@ on a large table.
 - An absent `originalS3Path` is normal for an already-progressive upload. It is only
   a problem when `playback.ready` is also empty.
 - Database migrations run automatically when `videoMetadata.storage = "db"`.
+
+---
+
+## Instrumented calls (hs-utils otel)
+
+Traces and metrics come from hs-utils' `otel` module, v0.37.1 and later. This repo is on v0.35.0, so until it
+bumps, read this section as the target. All of it is inert until `otel.enabled` is set, so it can land before
+a Collector or Honeycomb key exists. The full reference is hs-utils' `CLAUDE.md` (v0.37.0).
+
+**Startup.**
+- `let _otel = hs_utils::otel::init(&log_level, &cfg.otel)?;` replaces `logging::init`, with the same level
+  string. Call it inside the runtime and hold `_otel` for the whole of `main`; dropping it flushes the
+  exporters.
+- Add `#[serde(default)] pub otel: hs_utils::otel::OtelConfig` to the config, and ship
+  `"otel": { "enabled": "false", "serviceName": "video-service" }` in `config.json`.
+- `.wrap(hs_utils::otel::actix_trace())` on the `App`, in place of `.wrap(hs_utils::middleware::timing())`
+  (feature `otel-actix`). It names spans by route template and adopts the caller's `traceparent`.
+- **A path segment that is a credential** (`/hooks/{token}`, a magic-link token): install a redactor before
+  serving, `hs_utils::otel::set_path_redactor(redact_fn)`. The layer records the concrete `url.path` otherwise.
+  Replacing a hand-rolled `TraceLayer` that redacted paths means moving its redaction here.
+
+**Outbound HTTP: `.send_traced()`, never `.send()`.**
+```rust
+use hs_utils::http_client::SendTraced as _;
+let resp = state.http.get(&url).header("X-Api-Key", &key).send_traced().await?;
+```
+- It records the call as a client span with status and duration, with query values redacted.
+- With `otel`, it sends `traceparent`, so the service on the other end continues this trace. A bare `.send()` is
+  a call no trace can see, and starts an unconnected trace on the far side.
+- **A URL that is its own credential** uses `.send_traced_opaque()`, which records only `scheme://host:port`.
+  That covers Slack and Discord webhooks, a user-supplied target, and an MCP server URL with a key in it.
+- Needs the hs-utils feature `http-client`.
+- Once every call is converted, add a `clippy.toml` so new code can't drop out of the trace:
+```toml
+disallowed-methods = [
+    { path = "reqwest::RequestBuilder::send", reason = "use .send_traced() (hs_utils::http_client::SendTraced) so the call is traced and carries traceparent" },
+]
+```
+
+**Queries.**
+- sqlx already logs each statement (target `sqlx::query`, SQL text without bind values).
+- For a span per repository call, use `#[tracing::instrument(skip_all, name = "db.<operation>",
+  fields(db.system.name = "postgresql"))]`.
+- `db.slowqueryms` sets the slow-statement warning (default 1000).
+
+**Name operations, never data.**
+- Span names, `client_span`'s system and operation, and metric labels are constants from code.
+- No ids, emails, keys, tokens or SQL literals: spans go to a third-party store, and every distinct value is a
+  new series there.
+- If you need a value, record it as a field in the handler, where a reviewer can see it.
+
+**Metrics need no extra code.** `otel::init` and the layers above report:
+- request durations and in-flight requests, by route;
+- outbound latency, by host;
+- DB pool use;
+- process and container CPU, memory, I/O and pressure stall (the container's iowait).
+
+Set `otel__metricsEnabled: "false"` to keep traces only.
