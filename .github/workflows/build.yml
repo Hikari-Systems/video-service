@@ -16,9 +16,9 @@ jobs:
         platform: [amd64, arm64]
         include:
           - platform: amd64
-            runner: self-hosted-public-amd64
+            runner: blacksmith-2vcpu-ubuntu-2404
           - platform: arm64
-            runner: self-hosted-public-arm64
+            runner: blacksmith-2vcpu-ubuntu-2404-arm
     services:
       registry:
         image: registry:3.0
@@ -74,7 +74,7 @@ jobs:
   # On the amd64 hosts: the registry is reached on a Docker-assigned host port via localhost, and
   # skopeo may need sudo apt.
   merge-manifest:
-    runs-on: self-hosted-public-amd64
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 10
     needs: build
     services:
