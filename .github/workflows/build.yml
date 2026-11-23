@@ -9,16 +9,16 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ fromJSON(vars.RUNNER_MAP || '{}')[matrix.runner] || (contains(matrix.runner, 'arm64') && 'ubuntu-24.04-arm' || 'ubuntu-latest') }}
     timeout-minutes: 40
     strategy:
       matrix:
         platform: [amd64, arm64]
         include:
           - platform: amd64
-            runner: blacksmith-2vcpu-ubuntu-2404
+            runner: linux-x64-build
           - platform: arm64
-            runner: blacksmith-2vcpu-ubuntu-2404-arm
+            runner: linux-arm64-build
     services:
       registry:
         image: registry:3.0
@@ -74,7 +74,7 @@ jobs:
   # On the amd64 hosts: the registry is reached on a Docker-assigned host port via localhost, and
   # skopeo may need sudo apt.
   merge-manifest:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ${{ fromJSON(vars.RUNNER_MAP || '{}')['linux-any-light'] || 'ubuntu-latest' }}
     timeout-minutes: 10
     needs: build
     services:
