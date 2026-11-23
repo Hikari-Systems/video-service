@@ -47,3 +47,8 @@ jobs:
         with:
           image: ghcr.io/hikari-systems/${{ github.event.repository.name }}
           registry-token: ${{ secrets.GH_TOKEN }}
+          s3-bucket: hikari-docker-registry
+          s3-region: ${{ secrets.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          registry-http-secret: ${{ secrets.DOCKER_REGISTRY_SECRET }}
