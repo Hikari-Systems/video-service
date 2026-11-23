@@ -52,3 +52,5 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           registry-http-secret: ${{ secrets.DOCKER_REGISTRY_SECRET }}
+          # Only the deploy branches are copied into the S3-backed registry.
+          save-to-s3-registry: ${{ github.ref_name == 'main' || github.ref_name == 'preview' }}
